@@ -5,6 +5,8 @@ echo <%= memory_limit %>
 echo <%= source_size %>
 
 # compile checker
+mkdir ../files 2> /dev/null
+
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 CHECKER_PATH="$DIR/../files/<%= checker_path %>"
 CHECKER_OUT="$DIR/../files/checker"
