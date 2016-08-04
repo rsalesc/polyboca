@@ -11,6 +11,6 @@ DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 CHECKER_PATH="$DIR/../files/<%= checker_path %>"
 CHECKER_OUT="$DIR/../files/checker"
 
-g++ -std=c++11 $CHECKER_PATH -o $CHECKER_OUT
+g++ -std=c++11 -static -O2 -lm $CHECKER_PATH -o $CHECKER_OUT
 
 exit 0
