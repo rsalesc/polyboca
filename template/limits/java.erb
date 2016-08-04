@@ -1,0 +1,14 @@
+#!/bin/bash
+echo <%= (time_limit/1000).to_i %>
+echo <%= reps %>
+echo <%= memory_limit %>
+echo <%= source_size %>
+
+# compile checker
+DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+CHECKER_PATH="$DIR/../files/<%= checker_path %>"
+CHECKER_OUT="$DIR/../files/checker"
+
+g++ -std=c++11 $CHECKER_PATH -o $CHECKER_OUT
+
+exit 0
