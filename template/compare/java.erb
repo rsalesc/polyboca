@@ -32,8 +32,8 @@ fi
 
 # Next lines of this script just compares team_output and sol_output,
 # although it is possible to change them to more complex evaluations.
-
-../files/checker $3 $1 $2
+DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+./checker $3 $1 $2
 EC=$?
 
 if [ $EC -eq 0 ]; then
@@ -43,6 +43,6 @@ elif [ $EC -eq 1 ]; then
 elif [ $EC -eq 2 ]; then
   exit 5
 elif [ $EC -ne 3 ]; then
-  echo "unkown compare error"
+  echo "unkown compare error $EC"
   exit 43
 fi

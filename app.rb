@@ -69,7 +69,7 @@ class Problem
   end
 
   def get_files
-    @doc.xpath("//files/resources/file/@path | //files/executables/executable/source/@path") \
+    @doc.xpath("//source/@path | //file/@path") \
       .to_a.map!{|x| File.expand_path(x.to_s, @dir)}
   end
 
@@ -89,7 +89,7 @@ class PolyBoca
     @time_multiplier = 1
     @clock = false
     @repetitions = 1
-    @source_size = 1024 # in kb
+    @source_size = 512 # in kb
   end
 
   def to_boca(poly_zip)
@@ -169,5 +169,7 @@ class PolyBoca
   end
 end
 
-poly = PolyBoca.new
-poly.to_boca("prob.zip")
+if __FILE__ == $0 then
+    poly = PolyBoca.new
+    poly.to_boca("arvore.zip")
+end

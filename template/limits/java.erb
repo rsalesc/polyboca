@@ -1,29 +1,6 @@
 #!/bin/bash
-echo <%= (time_limit/1000).to_i %>
+echo <%= ((time_limit*multiplier+999)/1000).to_i %>
 echo <%= reps %>
 echo <%= memory_limit %>
 echo <%= source_size %>
-
-# compile checker
-mkdir ../files 2> /dev/null
-
-DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-CHECKER_PATH="$DIR/../files/<%= checker_path %>"
-CHECKER_OUT="$DIR/../files/checker"
-
-# find compiler
-cc=\`which g++\`
-[ -x "\$cc" ] || cc=/usr/bin/g++
-if [ ! -x "\$cc" ]; then
-    echo "\$cc not found or it's not executable"
-    exit 47
-fi
-
-$cc -std=c++11 -static -O2 -lm $CHECKER_PATH -o $CHECKER_OUT
-
-if [ $? -ne 0 ]; then
-  echo "Checker could not be compiled"
-  exit 47
-fi
-
 exit 0
