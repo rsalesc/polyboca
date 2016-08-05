@@ -3,10 +3,12 @@ require 'nokogiri'
 require 'zip'
 require 'fileutils'
 require 'pathname'
+require 'optparse'
 require_relative 'erba'
 require_relative 'utils'
 
-$TEMPLATE_PATH = "template"
+$DIR = File.expand_path(File.dirname(__FILE__))
+$TEMPLATE_PATH = "#{$DIR}/template"
 $STATEMENT_PATH = "description/statement.pdf"
 $FILES_PATH = "files/"
 
@@ -89,20 +91,28 @@ end
 
 class PolyBoca
   attr_accessor :time_mult
-  attr_accessor :clock
   attr_accessor :repetitions
   attr_accessor :source_size
+  attr_accessor :output_dir
 
   def initialize()
-    @time_multiplier = 1
-    @clock = false
+    @time_mult = 1
     @repetitions = 1
     @source_size = 512 # in kb
+    @output_dir = nil
   end
 
   def to_boca(poly_zip)
-    poly_zip_ext = File.extname(poly_zip)
-    final_name = poly_zip.gsub(poly_zip_ext, "_boca#{poly_zip_ext}")
+    poly_zip_final = "#{File.basename(poly_zip, '.*')}_boca.zip"
+    final_name = "#{poly_zip_final}"
+
+    if @output_dir.nil? then
+        final_name = File.join(File.dirname(poly_zip), final_name)
+    else
+        final_name = File.join(@output_dir, final_name)
+    end
+
+    p final_name
 
     Dir.mktmpdir{|poly_dir|
       unzip_file(poly_zip, poly_dir)
@@ -111,12 +121,13 @@ class PolyBoca
 
       # init boca_dir
       Dir.mktmpdir{|boca_dir|
-        p boca_dir # debug
+        puts "Temp boca_dir: #{boca_dir}" # debug
+        puts
 
         # prepare bindings
         vars = {
-          multiplier: @time_multiplier,
-          clock: @clock ? @p.get_cpu_speed : 0,
+          multiplier: @time_mult,
+          clock:  @p.get_cpu_speed,
           reps: @repetitions,
           source_size: @source_size,
 
@@ -130,7 +141,7 @@ class PolyBoca
           checker_content: fix_raw(File.read(@p.get_checker[0])),
           testlib_content: fix_raw(File.read(@p.get_testlib))
         }
-
+        
         puts "Copying and generating templates..."
         # copy templates
         template_pn = Pathname.new("#{$TEMPLATE_PATH}/")
@@ -180,6 +191,40 @@ class PolyBoca
 end
 
 if __FILE__ == $0 then
+    to_process = []
     poly = PolyBoca.new
-    poly.to_boca("arvore.zip")
+    OptionParser.new do |parser|
+        parser.banner = "Usage: #{$0} [options]"
+
+        parser.on("-f", "--file PATTERN", 
+            "Convert every file that matches PATTERN (glob-like pattern") do |pattern|
+            to_process = Dir.glob(pattern).select{|x| File.file?(x)}
+        end
+
+        parser.on("-t", "--time MULTIPLIER",
+            "Set time multiplier to be applied to the TLs") do |mult|
+            poly.time_mult = mult
+        end
+
+        parser.on("-r", "--runs NRUNS",
+            "Number of times a solution should be run against a test") do |nruns|
+            poly.repetitions = nruns
+        end
+
+        parser.on("--source-limit LIMIT",
+            "Source limit in KB") do |limit|
+            poly.source_size = limit
+        end
+
+        parser.on("-d", "--dir DIR",
+            "Specify custom output dir") do |dir|
+            FileUtils.mkdir_p(dir) unless File.directory?(dir)
+            poly.output_dir = dir
+        end
+    end.parse!
+
+    to_process.each do |x|
+            puts "============ Processing package #{x}..."
+            poly.to_boca(x)
+    end
 end

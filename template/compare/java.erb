@@ -38,18 +38,14 @@ EC=$?
 echo "checker exitcode = $EC"
 echo "$output"
 
-NL='
-'
-last_output="${output##*$NL}"
-
 if [ $EC -eq 0 ]; then
-  echo "$last_output"
+  echo "checker found no differences"
   exit 4
 elif [ $EC -eq 1 ]; then
-  echo "$last_output"
+  echo "checker found differences"
   exit 6
 elif [ $EC -eq 2 ]; then
-  echo "$last_output"
+  echo "checker failed"
   exit 5
 elif [ $EC -ne 3 ]; then
   echo "unkown compare error $EC"

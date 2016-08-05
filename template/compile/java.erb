@@ -39,7 +39,6 @@
 # other_codes are unknown to boca: in this case BOCA will present the
 #                                  last line of standard output to the judge
 
-
 umask 0022
 # compile checker
 # DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
@@ -65,12 +64,26 @@ EOF
 printf "%s" "${TestlibContent}" > testlib.h
 printf "%s" "${CheckerContent}" > $CHECKER_PATH
 
-$cc -std=c++11 -static -O2 -lm $CHECKER_PATH -o $CHECKER_OUT 2> /dev/null
+checker_hash=($(md5sum $CHECKER_PATH))
+checker_cache="/tmp/boca-${checker_hash}"
 
-if [ $? -ne 0 ]; then
-  echo "Checker could not be compiled"
-  exit 47
+echo "Polygon checker hash: $checker_hash"
+if [ -f "$checker_cache" ]; then
+    echo "Recovering polygon checker from cache: $checker_cache"
+    cp "$checker_cache" $CHECKER_OUT -f
+else
+    echo "Compiling polygon checker: $CHECKER_PATH"
+    $cc -std=c++11 -static -O2 -lm $CHECKER_PATH -o $CHECKER_OUT 2> /dev/null
+    
+    if [ $? -ne 0 ]; then
+        echo "Checker could not be compiled"
+        exit 47
+    fi
+
+    cp $CHECKER_OUT "$checker_cache" -f
 fi
+
+chmod 0755 $CHECKER_OUT
 
 
 
