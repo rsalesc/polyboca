@@ -10,6 +10,10 @@ $TEMPLATE_PATH = "template"
 $STATEMENT_PATH = "description/statement.pdf"
 $FILES_PATH = "files/"
 
+def fix_raw(s)
+  s
+end
+
 class Problem
   def initialize(obj, dir=Dir.pwd, lang="portuguese", testset="tests")
     @doc = Nokogiri::XML(obj)
@@ -77,6 +81,10 @@ class Problem
     node = @doc.xpath("//assets/checker/source").first
     [File.expand_path(node.xpath("@path").to_s, @dir), node.xpath("@type").to_s]
   end
+
+  def get_testlib
+    self.get_files.select {|x| x =~ /(.*\/)*testlib\.h$/}[0]
+  end
 end
 
 class PolyBoca
@@ -118,7 +126,9 @@ class PolyBoca
           time_limit: @p.get_timelimit,
           memory_limit: @p.get_memorylimit,
           checker_path: File.basename(@p.get_checker[0]),
-          checker_lang: @p.get_checker[1]
+          checker_lang: @p.get_checker[1],
+          checker_content: fix_raw(File.read(@p.get_checker[0])),
+          testlib_content: fix_raw(File.read(@p.get_testlib))
         }
 
         puts "Copying and generating templates..."

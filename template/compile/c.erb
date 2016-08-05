@@ -40,13 +40,11 @@
 #                                  last line of standard output to the judge
 
 umask 0022
-
 # compile checker
-DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-mkdir $DIR/../files 2> /dev/null
+# DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
-CHECKER_PATH="$DIR/../files/<%= checker_path %>"
-CHECKER_OUT="checker"
+CHECKER_PATH="checker.cpp"
+CHECKER_OUT="../checker.exe"
 
 # find compiler
 cc=`which g++`
@@ -55,6 +53,16 @@ if [ ! -x "$cc" ]; then
     echo "$cc not found or it's not executable"
     exit 47
 fi
+read -r -d '' TestlibContent <<"EOF"
+<%= testlib_content %>
+EOF
+  
+read -r -d '' CheckerContent <<"EOF"
+<%= checker_content %>
+EOF
+
+printf "%s" "${TestlibContent}" > testlib.h
+printf "%s" "${CheckerContent}" > $CHECKER_PATH
 
 $cc -std=c++11 -static -O2 -lm $CHECKER_PATH -o $CHECKER_OUT 2> /dev/null
 
@@ -63,7 +71,9 @@ if [ $? -ne 0 ]; then
   exit 47
 fi
 
+chmod 0755 $CHECKER_OUT
 
+# normal compilation
 if [ "$1" == "" ]; then
     echo "parameter problem"
     exit 43
