@@ -4,6 +4,7 @@ require 'zip'
 require 'fileutils'
 require 'pathname'
 require 'optparse'
+require 'yaml'
 require_relative 'erba'
 require_relative 'utils'
 
@@ -14,6 +15,10 @@ $FILES_PATH = "files/"
 
 def fix_raw(s)
   s
+end
+
+def zeropad(s)
+  s.to_s.rjust(3, "0")
 end
 
 class Problem
@@ -102,7 +107,7 @@ class PolyBoca
     @output_dir = nil
   end
 
-  def to_boca(poly_zip)
+  def to_boca(poly_zip, short_name=nil)
     poly_zip_final = "#{File.basename(poly_zip, '.*')}_boca.zip"
     final_name = "#{poly_zip_final}"
 
@@ -131,7 +136,7 @@ class PolyBoca
           reps: @repetitions,
           source_size: @source_size,
 
-          short_name: @p.get_short_name,
+          short_name: short_name.nil? ? @p.get_short_name : short_name,
           full_name: @p.get_name,
           statement_path: @p.get_pdf_path.empty? ? "no" : File.basename($STATEMENT_PATH),
           time_limit: @p.get_timelimit,
@@ -141,7 +146,7 @@ class PolyBoca
           checker_content: fix_raw(File.read(@p.get_checker[0])),
           testlib_content: fix_raw(File.read(@p.get_testlib))
         }
-        
+
         puts "Copying and generating templates..."
         # copy templates
         template_pn = Pathname.new("#{$TEMPLATE_PATH}/")
@@ -173,8 +178,8 @@ class PolyBoca
         # copy testcases
         @p.get_tests.each do |t|
           input, output, idx = t
-          copy_file(input, File.join(boca_dir, "input", idx.to_s))
-          copy_file(output, File.join(boca_dir, "output", idx.to_s))
+          copy_file(input, File.join(boca_dir, "input", zeropad(idx.to_s)))
+          copy_file(output, File.join(boca_dir, "output", zeropad(idx.to_s)))
         end
 
         puts "Copying PDF statement..."
@@ -188,20 +193,97 @@ class PolyBoca
       }
     }
   end
+
+  def to_jude(poly_zip)
+    poly_zip_final = "#{File.basename(poly_zip, '.*')}_jude.zip"
+    final_name = "#{poly_zip_final}"
+
+    if @output_dir.nil? then
+        final_name = File.join(File.dirname(poly_zip), final_name)
+    else
+        final_name = File.join(@output_dir, final_name)
+    end
+
+    p final_name
+
+    Dir.mktmpdir{|poly_dir|
+      unzip_file(poly_zip, poly_dir)
+      poly_f = File.open(File.join(poly_dir, "problem.xml"))
+      @p = Problem.new(poly_f, poly_dir)
+
+      Dir.mktmpdir{|jude_dir|
+        puts "Temp jude dir: #{jude_dir}"
+        puts
+
+        # prepare jude.yml
+        vars = {
+          "weight" => 1,
+          "limits" => {
+            "source" => @source_size,
+            "time" => @p.get_timelimit,
+            "memory" => @p.get_memorylimit,
+            "timeMultiplier" => @time_mult
+          },
+          "datasets" => [
+            {
+              "percentage" => 1,
+              "path" => "main",
+              "name" => "main"
+            }
+          ]
+        }
+
+        # copy cplusplus+testlib checker
+        checker_path = @p.get_checker[0]
+        puts "Copying checker #{File.basename(checker_path)}..."
+
+        copy_file(checker_path, File.join(jude_dir, "checker.cpp"))
+
+        # copy testcases
+        puts "Copying testcases to a single dataset called \"main\"..."
+        @p.get_tests.each do |t|
+          input, output, idx = t
+          copy_file(input, File.join(jude_dir, "tests/main", "#{zeropad(idx.to_s)}.in"))
+          copy_file(output, File.join(jude_dir, "tests/main", "#{zeropad(idx.to_s)}.out"))
+        end
+
+        puts "Copying PDF statement..."
+        # copy statement
+
+        if not @p.get_pdf_path.empty? then
+          copy_file(@p.get_pdf_path, File.join(jude_dir, "statement.pdf"))
+          vars["statement"] = "statement.pdf"
+        end
+
+        # save jude.yml
+        File.write(File.join(jude_dir, "jude.yml"), vars.to_yaml)
+
+        puts "Creating ZIP #{File.basename(final_name)}"
+        zf = ZipFileGenerator.new(jude_dir, final_name)
+        zf.write
+      }
+    }
+  end
 end
 
 if __FILE__ == $0 then
     to_process = []
     poly = PolyBoca.new
+    short_name = nil
+    target = nil
     OptionParser.new do |parser|
         parser.banner = "Usage: #{$0} [options]"
 
+        parser.on("-t", "--target FORMAT", "Specify the target format") do |format|
+          target = format
+        end
+
         parser.on("-f", "--file PATTERN", 
-            "Convert every file that matches PATTERN (glob-like pattern") do |pattern|
+            "Convert every file that matches PATTERN (glob-like pattern)") do |pattern|
             to_process = Dir.glob(pattern).select{|x| File.file?(x)}
         end
 
-        parser.on("-t", "--time MULTIPLIER",
+        parser.on("-m", "--multiplier MULTIPLIER",
             "Set time multiplier to be applied to the TLs") do |mult|
             poly.time_mult = mult
         end
@@ -221,10 +303,20 @@ if __FILE__ == $0 then
             FileUtils.mkdir_p(dir) unless File.directory?(dir)
             poly.output_dir = dir
         end
+
+        parser.on("-s", "--short SHORT_NAME",
+            "Specify problem short name used by BOCA") do |short|
+          short_name = short
+        end
     end.parse!
 
     to_process.each do |x|
             puts "============ Processing package #{x}..."
-            poly.to_boca(x)
+            puts "Target Format: #{target}"
+            if target != "jude" then
+              poly.to_boca(x, short_name)
+            else
+              poly.to_jude(x)
+            end 
     end
 end
