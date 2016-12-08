@@ -1,10 +1,11 @@
-require 'rubygems'
+#require 'rubygems'
 require 'nokogiri'
 require 'zip'
 require 'fileutils'
 require 'pathname'
 require 'optparse'
 require 'yaml'
+require 'highline/import'
 require_relative 'erba'
 require_relative 'utils'
 
@@ -21,6 +22,35 @@ def zeropad(s)
   s.to_s.rjust(3, "0")
 end
 
+def give_permission_to_sh(dir)
+  to_give = Dir.glob(File.join(dir, "**/*.sh")).select{|x| File.file?(x)}
+  to_give.each do |x|
+    File.chmod(0744, x)
+  end
+end
+
+def get_problems_sh(problems)
+  return problems.map{|x| File.join(x[:path], "doall.sh")}
+end
+
+class Contest
+  def initialize(obj, dir = Dir.pwd)
+    @doc = Nokogiri::XML(obj)
+    @dir = dir
+  end
+
+  def get_problems
+    ps = @doc.xpath("//problems/problem").map{|x|
+      {
+        index: x.attr("index").upcase, 
+        short_name: File.basename(x.attr("url")),
+        path: File.join(@dir, "problems", File.basename(x.attr("url")))
+      }
+    }
+    return ps
+  end
+end
+
 class Problem
   def initialize(obj, dir=Dir.pwd, lang="portuguese", testset="tests")
     @doc = Nokogiri::XML(obj)
@@ -35,6 +65,10 @@ class Problem
 
   def get_name
     @doc.xpath("//problem/names/name[@language='#{@lang}'][1]/@value").first.to_s
+  end
+
+  def get_revision
+    @doc.xpath("//problem").attr("revision").to_s.to_i
   end
 
   def get_pdf_path
@@ -107,9 +141,91 @@ class PolyBoca
     @output_dir = nil
   end
 
-  def to_boca(poly_zip, short_name=nil)
-    poly_zip_final = "#{File.basename(poly_zip, '.*')}_boca.zip"
-    final_name = "#{poly_zip_final}"
+  def to_boca_dir(poly_dir, short_name, final_name, retrieve_name: false)
+    poly_f = File.open(File.join(poly_dir, "problem.xml"))
+    @p = Problem.new(poly_f, poly_dir)
+
+    final_name = "#{final_name}_#{@p.get_revision}_boca.zip"
+
+    if retrieve_name then
+      return final_name
+    end
+
+    # init boca_dir
+    Dir.mktmpdir{|boca_dir|
+      puts "Temp boca_dir: #{boca_dir}" # debug
+      puts
+
+      # prepare bindings
+      vars = {
+        multiplier: @time_mult,
+        clock:  @p.get_cpu_speed,
+        reps: @repetitions,
+        source_size: @source_size,
+
+        short_name: short_name.nil? ? @p.get_short_name : short_name,
+        full_name: @p.get_name,
+        statement_path: @p.get_pdf_path.empty? ? "no" : File.basename($STATEMENT_PATH),
+        time_limit: @p.get_timelimit,
+        memory_limit: @p.get_memorylimit,
+        checker_path: File.basename(@p.get_checker[0]),
+        checker_lang: @p.get_checker[1],
+        checker_content: fix_raw(File.read(@p.get_checker[0])),
+        testlib_content: fix_raw(File.read(@p.get_testlib))
+      }
+
+      puts "Copying and generating templates..."
+      # copy templates
+      template_pn = Pathname.new("#{$TEMPLATE_PATH}/")
+      Dir.glob("#{$TEMPLATE_PATH}/**/*") do |path|
+        if File.file? path then
+          path_pn = Pathname.new(path)
+          path_dest = File.join(boca_dir, path_pn.relative_path_from(template_pn).to_s)
+          if File.extname(path) == ".erb" then
+            content = File.read(path)
+            rendered = Erba.new(vars).render(content)
+            path_dest.gsub!(".erb", "")
+            FileUtils.mkdir_p(File.dirname(path_dest))
+            File.open(path_dest, "w"){|f| f.write(rendered)}
+            puts "- Copying and rendering #{File.basename(path)}"
+          else
+            copy_file(path, path_dest)
+          end
+        end
+      end
+
+      puts "Copying files (sources and resources)..."
+      # copy files
+      @p.get_files.each do |path|
+        puts "- Copying file #{File.basename(path)}"
+        copy_file(path, File.join(boca_dir, $FILES_PATH, File.basename(path)))
+      end
+
+      puts "Copying testcases (input and answers)..."
+      # copy testcases
+      @p.get_tests.each do |t|
+        input, output, idx = t
+        copy_file(input, File.join(boca_dir, "input", zeropad(idx.to_s)))
+        copy_file(output, File.join(boca_dir, "output", zeropad(idx.to_s)))
+      end
+
+      puts "Copying PDF statement..."
+      # copy statement
+      copy_file(@p.get_pdf_path, File.join(boca_dir, $STATEMENT_PATH)) \
+        unless @p.get_pdf_path.empty?
+
+      puts "Creating ZIP #{File.basename(final_name)}"
+      zf = ZipFileGenerator.new(boca_dir, final_name)
+      zf.write
+    }
+  end
+
+  def to_boca(poly_zip, short_name=nil, index: nil, retrieve_name: false)
+    poly_zip_final = "#{File.basename(poly_zip, '.*')}"
+    final_name = poly_zip_final
+    if !index.nil? then
+      final_name = "#{index}_#{final_name}"
+    end
 
     if @output_dir.nil? then
         final_name = File.join(File.dirname(poly_zip), final_name)
@@ -117,80 +233,56 @@ class PolyBoca
         final_name = File.join(@output_dir, final_name)
     end
 
-    p final_name
+    if !retrieve_name then 
+      puts "Target Path: #{final_name}"
+    end
 
-    Dir.mktmpdir{|poly_dir|
-      unzip_file(poly_zip, poly_dir)
-      poly_f = File.open(File.join(poly_dir, "problem.xml"))
-      @p = Problem.new(poly_f, poly_dir)
-
-      # init boca_dir
-      Dir.mktmpdir{|boca_dir|
-        puts "Temp boca_dir: #{boca_dir}" # debug
-        puts
-
-        # prepare bindings
-        vars = {
-          multiplier: @time_mult,
-          clock:  @p.get_cpu_speed,
-          reps: @repetitions,
-          source_size: @source_size,
-
-          short_name: short_name.nil? ? @p.get_short_name : short_name,
-          full_name: @p.get_name,
-          statement_path: @p.get_pdf_path.empty? ? "no" : File.basename($STATEMENT_PATH),
-          time_limit: @p.get_timelimit,
-          memory_limit: @p.get_memorylimit,
-          checker_path: File.basename(@p.get_checker[0]),
-          checker_lang: @p.get_checker[1],
-          checker_content: fix_raw(File.read(@p.get_checker[0])),
-          testlib_content: fix_raw(File.read(@p.get_testlib))
-        }
-
-        puts "Copying and generating templates..."
-        # copy templates
-        template_pn = Pathname.new("#{$TEMPLATE_PATH}/")
-        Dir.glob("#{$TEMPLATE_PATH}/**/*") do |path|
-          if File.file? path then
-            path_pn = Pathname.new(path)
-            path_dest = File.join(boca_dir, path_pn.relative_path_from(template_pn).to_s)
-            if File.extname(path) == ".erb" then
-              content = File.read(path)
-              rendered = Erba.new(vars).render(content)
-              path_dest.gsub!(".erb", "")
-              FileUtils.mkdir_p(File.dirname(path_dest))
-              File.open(path_dest, "w"){|f| f.write(rendered)}
-              puts "- Copying and rendering #{File.basename(path)}"
-            else
-              copy_file(path, path_dest)
-            end
-          end
-        end
-
-        puts "Copying files (sources and resources)..."
-        # copy files
-        @p.get_files.each do |path|
-          puts "- Copying file #{File.basename(path)}"
-          copy_file(path, File.join(boca_dir, $FILES_PATH, File.basename(path)))
-        end
-
-        puts "Copying testcases (input and answers)..."
-        # copy testcases
-        @p.get_tests.each do |t|
-          input, output, idx = t
-          copy_file(input, File.join(boca_dir, "input", zeropad(idx.to_s)))
-          copy_file(output, File.join(boca_dir, "output", zeropad(idx.to_s)))
-        end
-
-        puts "Copying PDF statement..."
-        # copy statement
-        copy_file(@p.get_pdf_path, File.join(boca_dir, $STATEMENT_PATH)) \
-          unless @p.get_pdf_path.empty?
-
-        puts "Creating ZIP #{File.basename(final_name)}"
-        zf = ZipFileGenerator.new(boca_dir, final_name)
-        zf.write
+    if !File.directory?(poly_zip) then
+      Dir.mktmpdir{|poly_dir|
+        unzip_file(poly_zip, poly_dir)
+        self.to_boca_dir(poly_dir, short_name, final_name, retrieve_name: retrieve_name)
       }
+    else
+      self.to_boca_dir(poly_zip, short_name, final_name, retrieve_name: retrieve_name)
+    end
+  end
+
+  def from_contest_to_boca(poly_zip)
+    Dir.mktmpdir{|contest_dir|
+      unzip_file(poly_zip, contest_dir)
+      contest_f = File.open(File.join(contest_dir, "contest.xml"))
+      @c = Contest.new(contest_f, contest_dir)
+
+      problems = @c.get_problems
+
+      # generate everything needed
+      give_permission_to_sh(contest_dir)
+
+      problems.select! do |problem|
+        target_path = self.to_boca(problem[:path], index: problem[:index], retrieve_name: true)
+        if File.file?(target_path) then
+          puts "ZIP problem for #{problem[:short_name]} already exists for this revision. Skipping..."
+          next false
+        else
+          next true
+        end
+      end
+      
+      was_good = true
+      problems.each do |problem|
+        do_all_path = File.join(problem[:path], "doall.sh")
+        Dir.chdir(problem[:path]){
+          was_good = was_good && system(do_all_path, out: $stdout, err: :out)
+        }
+      end
+
+      if !was_good then 
+        exit unless agree('The do_all step has found some errors. Do you want to continue anyway?')
+      end
+
+      problems.each do |problem|
+        self.to_boca(problem[:path], index: problem[:index])
+      end
     }
   end
 
@@ -204,7 +296,7 @@ class PolyBoca
         final_name = File.join(@output_dir, final_name)
     end
 
-    p final_name
+    puts "Target Path: #{final_name}"
 
     Dir.mktmpdir{|poly_dir|
       unzip_file(poly_zip, poly_dir)
@@ -261,12 +353,18 @@ class PolyBoca
         puts "Creating ZIP #{File.basename(final_name)}"
         zf = ZipFileGenerator.new(jude_dir, final_name)
         zf.write
+
+        puts ""
       }
     }
   end
 end
 
+
+
 if __FILE__ == $0 then
+    contest_path = nil
+
     to_process = []
     poly = PolyBoca.new
     short_name = nil
@@ -276,6 +374,10 @@ if __FILE__ == $0 then
 
         parser.on("-t", "--target FORMAT", "Specify the target format") do |format|
           target = format
+        end
+
+        parser.on("-c", "--contest FILE", "Specify the contest file which will be converted") do |path|
+          contest_path = path
         end
 
         parser.on("-f", "--file PATTERN", 
@@ -310,13 +412,23 @@ if __FILE__ == $0 then
         end
     end.parse!
 
-    to_process.each do |x|
-            puts "============ Processing package #{x}..."
-            puts "Target Format: #{target}"
-            if target != "jude" then
-              poly.to_boca(x, short_name)
-            else
-              poly.to_jude(x)
-            end 
+    if contest_path.nil? then
+      to_process.each do |x|
+              puts "============ Processing package #{x}..."
+              puts "Target Format: #{target}"
+              if target != "jude" then
+                poly.to_boca(x, short_name)
+              else
+                poly.to_jude(x)
+              end 
+      end
+    else
+      puts "======= Processing contest #{contest_path}..."
+      puts "Target Format: #{target}"
+      if target != "jude" then
+        poly.from_contest_to_boca(contest_path)
+      else
+        puts "Not supported"
+      end
     end
 end
