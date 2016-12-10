@@ -6,6 +6,7 @@ require 'pathname'
 require 'optparse'
 require 'yaml'
 require 'highline/import'
+require 'i18n'
 require_relative 'erba'
 require_relative 'utils'
 
@@ -13,6 +14,8 @@ $DIR = File.expand_path(File.dirname(__FILE__))
 $TEMPLATE_PATH = "#{$DIR}/template"
 $STATEMENT_PATH = "description/statement.pdf"
 $FILES_PATH = "files/"
+
+I18n.enforce_available_locales = false
 
 def fix_raw(s)
   s
@@ -133,15 +136,17 @@ class PolyBoca
   attr_accessor :repetitions
   attr_accessor :source_size
   attr_accessor :output_dir
+  attr_accessor :force_pdf
 
   def initialize()
     @time_mult = 1
     @repetitions = 1
     @source_size = 512 # in kb
     @output_dir = nil
+    @force_pdf = nil
   end
 
-  def to_boca_dir(poly_dir, short_name, final_name, retrieve_name: false)
+  def to_boca_dir(poly_dir, short_name, final_name, index: nil, retrieve_name: false)
     poly_f = File.open(File.join(poly_dir, "problem.xml"))
     @p = Problem.new(poly_f, poly_dir)
 
@@ -151,11 +156,17 @@ class PolyBoca
       return final_name
     end
 
+    puts "Target Path: #{final_name}"
     # init boca_dir
     Dir.mktmpdir{|boca_dir|
       puts "Temp boca_dir: #{boca_dir}" # debug
       puts
 
+      statement_from = @force_pdf.nil? ? @p.get_pdf_path : @force_pdf
+      statement_ext = File.extname(statement_from)
+
+      no_statement = @p.get_pdf_path.empty? && @force_pdf.nil?
+      statement_path = index.nil? ? "description/#{short_name}#{statement_ext}" : "description/#{index}#{statement_ext}"
       # prepare bindings
       vars = {
         multiplier: @time_mult,
@@ -164,8 +175,8 @@ class PolyBoca
         source_size: @source_size,
 
         short_name: short_name.nil? ? @p.get_short_name : short_name,
-        full_name: @p.get_name,
-        statement_path: @p.get_pdf_path.empty? ? "no" : File.basename($STATEMENT_PATH),
+        full_name: I18n.transliterate(@p.get_name),
+        statement_path: no_statement ? "no" : File.basename(statement_path),
         time_limit: @p.get_timelimit,
         memory_limit: @p.get_memorylimit,
         checker_path: File.basename(@p.get_checker[0]),
@@ -211,12 +222,14 @@ class PolyBoca
 
       puts "Copying PDF statement..."
       # copy statement
-      copy_file(@p.get_pdf_path, File.join(boca_dir, $STATEMENT_PATH)) \
-        unless @p.get_pdf_path.empty?
+      copy_file(statement_from, File.join(boca_dir, statement_path)) \
+        unless statement_from.empty?
 
       puts "Creating ZIP #{File.basename(final_name)}"
       zf = ZipFileGenerator.new(boca_dir, final_name)
       zf.write
+      puts "-------"
+      puts ""
     }
   end
 
@@ -233,17 +246,13 @@ class PolyBoca
         final_name = File.join(@output_dir, final_name)
     end
 
-    if !retrieve_name then 
-      puts "Target Path: #{final_name}"
-    end
-
     if !File.directory?(poly_zip) then
       Dir.mktmpdir{|poly_dir|
         unzip_file(poly_zip, poly_dir)
-        self.to_boca_dir(poly_dir, short_name, final_name, retrieve_name: retrieve_name)
+        self.to_boca_dir(poly_dir, short_name, final_name, index: index, retrieve_name: retrieve_name)
       }
     else
-      self.to_boca_dir(poly_zip, short_name, final_name, retrieve_name: retrieve_name)
+      self.to_boca_dir(poly_zip, short_name, final_name, index: index, retrieve_name: retrieve_name)
     end
   end
 
@@ -354,6 +363,7 @@ class PolyBoca
         zf = ZipFileGenerator.new(jude_dir, final_name)
         zf.write
 
+        puts "-------"
         puts ""
       }
     }
@@ -404,6 +414,10 @@ if __FILE__ == $0 then
             "Specify custom output dir") do |dir|
             FileUtils.mkdir_p(dir) unless File.directory?(dir)
             poly.output_dir = dir
+        end
+
+        parser.on("--pdf PDF", "force problems to use this PDF") do |pdf|
+          poly.force_pdf = pdf
         end
 
         parser.on("-s", "--short SHORT_NAME",
