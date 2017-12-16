@@ -36,6 +36,12 @@ def get_problems_sh(problems)
   return problems.map{|x| File.join(x[:path], "doall.sh")}
 end
 
+def is_int?(str)
+  !!Integer(str)
+rescue ArgumentError, TypeError
+  false
+end
+
 class Contest
   def initialize(obj, dir = Dir.pwd)
     @doc = Nokogiri::XML(obj)
@@ -51,6 +57,73 @@ class Contest
       }
     }
     return ps
+  end
+end
+
+class Testset
+  def initialize(problem, set)
+    @doc = problem.instance_variable_get(:@doc)
+    @dir = problem.instance_variable_get(:@dir)
+    @set = set
+  end
+
+  def get_full_name
+    @set.xpath("@name").to_s
+  end
+
+  def get_name
+    pieces = self.get_full_name.split("_")
+    if pieces.size < 2 or !is_int?(pieces[-1]) then
+      return self.get_full_name
+    else
+      return pieces[0...-1] * ""
+    end
+  end
+
+  def get_weight
+    pieces = self.get_full_name.split("_")
+    if pieces.size < 2 or !is_int?(pieces[-1]) then
+      return 1
+    else
+      return pieces[-1].to_i
+    end
+  end
+
+  def get_cpu_speed
+    @doc.xpath("//judging[1]/@cpu-speed").to_s.to_i
+  end
+
+  def get_timelimit
+    @set.xpath("time-limit[1]/text()").first.to_s.to_i
+  end
+
+  def get_memorylimit
+    (@set.xpath("memory-limit[1]/text()").first.to_s.to_i/1024/1024).to_i
+  end
+
+  def test_count
+    @set.xpath("test-count[1]/text()").first.to_s.to_i
+  end
+
+  def get_input_pattern
+    @set.xpath("input-path-pattern/text()").first.to_s
+  end
+
+  def get_answer_pattern
+    @set.xpath("answer-path-pattern[1]/text()").first.to_s
+  end
+
+  def get_tests
+    res = []
+    input_pattern = self.get_input_pattern
+    answer_pattern = self.get_answer_pattern
+    (1..self.test_count).each do |i|
+      res << [File.expand_path(input_pattern % i, @dir),
+              File.expand_path(answer_pattern % i, @dir),
+              i]
+    end
+
+    return res
   end
 end
 
@@ -74,13 +147,31 @@ class Problem
     @doc.xpath("//problem").attr("revision").to_s.to_i
   end
 
+  def get_testset(name)
+    no = @doc.xpath("//judging[1]//testset[@name='#{name}']")
+    Testset.new(self, no)
+  end
+
+  def get_testsets
+    res = []
+    sets = @doc.xpath("//judging[1]//testset").to_a
+    sets.each do |set_no|
+      set = Testset.new(self, set_no)
+      if set.test_count > 0 then
+        res << set
+      end
+    end
+
+    return res
+  end
+
   def get_pdf_path
     p = @doc.xpath("//statements/statement[@type='application/pdf'][@language='#{@lang}'][1]/@path").to_s
     File.expand_path(p,@dir)
   end
 
   def get_cpu_speed
-    @set.xpath("//judging[1]/@cpu-speed").to_s.to_i
+    @doc.xpath("//judging[1]/@cpu-speed").to_s.to_i
   end
 
   def get_timelimit
@@ -281,7 +372,8 @@ class PolyBoca
       problems.each do |problem|
         do_all_path = File.join(problem[:path], "doall.sh")
         Dir.chdir(problem[:path]){
-          was_good = was_good && system(do_all_path, out: $stdout, err: :out)
+          last = system(do_all_path, out: $stdout, err: :out)
+          was_good = was_good && last
         }
       end
 
@@ -295,9 +387,134 @@ class PolyBoca
     }
   end
 
-  def to_jude(poly_zip)
-    poly_zip_final = "#{File.basename(poly_zip, '.*')}_jude.zip"
-    final_name = "#{poly_zip_final}"
+  def from_contest_to_jude(poly_zip)
+    Dir.mktmpdir{|contest_dir|
+      unzip_file(poly_zip, contest_dir)
+      contest_f = File.open(File.join(contest_dir, "contest.xml"))
+      @c = Contest.new(contest_f, contest_dir)
+      
+      problems = @c.get_problems
+      give_permission_to_sh(contest_dir)
+
+      problems.select! do |problem|
+        target_path = self.to_jude(problem[:path], index: problem[:index], retrieve_name: true)
+        if File.file?(target_path)
+          puts "ZIP problem for #{problem[:short_name]} already exists for this revision. Skipping..."
+          next false
+        else
+          next true
+        end
+      end
+
+      was_good = true
+      problems.each do |problem|
+        do_all_path = File.join(problem[:path], "doall.sh")
+        Dir.chdir(problem[:path]){
+          last = system(do_all_path, out: $stdout, err: :out)
+          was_good = was_good && last
+        }
+      end
+
+      if !was_good then
+        exit unless agree("The do_all step has found some errors. Do you want to continue anyway?")
+      end
+
+      problems.each do |problem|
+        self.to_jude(problem[:path], index: problem[:index])
+      end
+    }
+  end
+
+  def to_jude_dir(poly_dir, short_name, final_name, index: nil, retrieve_name: false)
+    poly_f = File.open(File.join(poly_dir, "problem.xml"))
+    @p = Problem.new(poly_f, poly_dir)
+
+    total_weight = 0
+    testsets = @p.get_testsets.sort_by{|t| t.get_name}
+
+    testsets.each do |set|
+      total_weight += set.get_weight
+    end
+
+    if total_weight == 0 then
+      total_weight = 1
+    end
+
+    final_name = "#{final_name}_#{@p.get_revision}_jude.zip"
+    if retrieve_name then
+      return final_name
+    end
+
+    puts "Target Path: #{final_name}"
+
+    Dir.mktmpdir{|jude_dir|
+      puts "Temp jude dir: #{jude_dir}"
+      puts
+
+      datasets = testsets.map{|set|
+        {
+          "percentage" => 1.0 * set.get_weight / total_weight,
+          "path" => set.get_name,
+          "name" => set.get_name
+        }
+      }
+
+      # prepare jude.yml
+      vars = {
+        "weight" => total_weight,
+        "limits" => {
+          "source" => @source_size,
+          "time" => @p.get_timelimit,
+          "memory" => @p.get_memorylimit,
+          "timeMultiplier" => @time_mult
+        },
+        "datasets" => datasets 
+      }
+
+      # copy cplusplus+testlib checker
+      checker_path = @p.get_checker[0]
+      puts "Copying checker #{File.basename(checker_path)}..."
+
+      copy_file(checker_path, File.join(jude_dir, "checker.cpp"))
+
+      # copy testcases
+      testsets.each do |set|
+        puts "Copying testcases from dataset \"#{set.get_name}\" of weight #{set.get_weight}..."
+        set_dir = File.join(jude_dir, "tests/#{set.get_name}")
+        set.get_tests.each do |t|
+          input, output, idx = t
+          copy_file(input, File.join(set_dir, "#{zeropad(idx.to_s)}.in"))
+          copy_file(output, File.join(set_dir, "#{zeropad(idx.to_s)}.out"))
+        end
+      end
+
+      puts "Copying PDF statement..."
+      # copy statement
+
+      if not @p.get_pdf_path.empty? then
+        copy_file(@p.get_pdf_path, File.join(jude_dir, "statement.pdf"))
+        vars["statement"] = "statement.pdf"
+      end
+
+      # save jude.yml
+      File.write(File.join(jude_dir, "jude.yml"), vars.to_yaml)
+
+      puts "Creating ZIP #{File.basename(final_name)}"
+      zf = ZipFileGenerator.new(jude_dir, final_name)
+      zf.write
+
+      puts "-------"
+      puts ""
+    }
+  end
+
+  def to_jude(poly_zip, short_name=nil, index: nil, retrieve_name: false)
+    poly_zip_final = "#{File.basename(poly_zip, '.*')}"
+    if !index.nil? then
+      final_name = "#{index}_#{poly_zip_final}"
+    else
+      final_name = poly_zip_final
+    end
 
     if @output_dir.nil? then
         final_name = File.join(File.dirname(poly_zip), final_name)
@@ -305,68 +522,14 @@ class PolyBoca
         final_name = File.join(@output_dir, final_name)
     end
 
-    puts "Target Path: #{final_name}"
-
-    Dir.mktmpdir{|poly_dir|
-      unzip_file(poly_zip, poly_dir)
-      poly_f = File.open(File.join(poly_dir, "problem.xml"))
-      @p = Problem.new(poly_f, poly_dir)
-
-      Dir.mktmpdir{|jude_dir|
-        puts "Temp jude dir: #{jude_dir}"
-        puts
-
-        # prepare jude.yml
-        vars = {
-          "weight" => 1,
-          "limits" => {
-            "source" => @source_size,
-            "time" => @p.get_timelimit,
-            "memory" => @p.get_memorylimit,
-            "timeMultiplier" => @time_mult
-          },
-          "datasets" => [
-            {
-              "percentage" => 1,
-              "path" => "main",
-              "name" => "main"
-            }
-          ]
-        }
-
-        # copy cplusplus+testlib checker
-        checker_path = @p.get_checker[0]
-        puts "Copying checker #{File.basename(checker_path)}..."
-
-        copy_file(checker_path, File.join(jude_dir, "checker.cpp"))
-
-        # copy testcases
-        puts "Copying testcases to a single dataset called \"main\"..."
-        @p.get_tests.each do |t|
-          input, output, idx = t
-          copy_file(input, File.join(jude_dir, "tests/main", "#{zeropad(idx.to_s)}.in"))
-          copy_file(output, File.join(jude_dir, "tests/main", "#{zeropad(idx.to_s)}.out"))
-        end
-
-        puts "Copying PDF statement..."
-        # copy statement
-
-        if not @p.get_pdf_path.empty? then
-          copy_file(@p.get_pdf_path, File.join(jude_dir, "statement.pdf"))
-          vars["statement"] = "statement.pdf"
-        end
-
-        # save jude.yml
-        File.write(File.join(jude_dir, "jude.yml"), vars.to_yaml)
-
-        puts "Creating ZIP #{File.basename(final_name)}"
-        zf = ZipFileGenerator.new(jude_dir, final_name)
-        zf.write
-
-        puts "-------"
-        puts ""
+    if File.directory?(poly_zip) then
+      return self.to_jude_dir(poly_zip, short_name, final_name, index: index, retrieve_name: retrieve_name)
+    else
+      Dir.mktmpdir{|poly_dir|
+        unzip_file(poly_zip, poly_dir)
+        return self.to_jude_dir(poly_dir, short_name, final_name, index: index, retrieve_name: retrieve_name)
       }
-    }
+    end
   end
 end
 
@@ -442,7 +605,7 @@ if __FILE__ == $0 then
       if target != "jude" then
         poly.from_contest_to_boca(contest_path)
       else
-        puts "Not supported"
+        poly.from_contest_to_jude(contest_path)
       end
     end
 end

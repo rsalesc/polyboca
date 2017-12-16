@@ -3,7 +3,7 @@ require 'zip'
 
 def copy_file(src, dest)
   dest_dir = File.dirname(dest)
-  FileUtils.mkdir_p(dest_dir)
+  FileUtils.mkdir_p(dest_dir) unless File.directory?(dest_dir)
   FileUtils.cp(src, dest)
 end
 
@@ -11,7 +11,7 @@ def unzip_file (file, destination)
   Zip::File.open(file) { |zip_file|
    zip_file.each { |f|
      f_path=File.join(destination, f.name)
-     FileUtils.mkdir_p(File.dirname(f_path))
+     FileUtils.mkdir_p(File.dirname(f_path)) unless File.directory?(File.dirname(f_path))
      zip_file.extract(f, f_path) unless File.exist?(f_path)
    }
   }
