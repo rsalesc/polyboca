@@ -491,8 +491,8 @@ class PolyBoca
       puts "Copying PDF statement..."
       # copy statement
 
-      if not @p.get_pdf_path.empty? then
-        copy_file(@p.get_pdf_path, File.join(jude_dir, "statement.pdf"))
+      if not @p.get_pdf_path.empty? or not @force_pdf.nil? then
+        copy_file(@force_pdf.nil? ? @p.get_pdf_path : @force_pdf, File.join(jude_dir, "statement.pdf"))
         vars["statement"] = "statement.pdf"
       end
 
